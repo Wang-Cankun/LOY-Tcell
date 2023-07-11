@@ -1,0 +1,151 @@
+---
+title: "functional Loss of Y score (fLOY_score)"
+author: "Cankun Wang"
+date: "`r format(Sys.time(), '%m/%d/%Y')`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    df_print: paged
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F)
+knitr::opts_chunk$set(message = F)
+knitr::opts_chunk$set(warning = F)
+knitr::opts_chunk$set(error = F)
+knitr::opts_chunk$set(fig.width = 8)
+
+library(Seurat)
+library(cowplot)
+library(ggplot2)
+library(patchwork)
+library(here)
+library(qs)
+library(Polychrome)
+library(RColorBrewer)
+library(tidyverse)
+library(data.table)
+library(circlize)
+library(RColorBrewer)
+library(ggpubr)
+library(matrixStats)
+library(ggstatsplot)
+```
+
+
+# Set working dir
+
+```{r,,eval=T,message=F,warning=F,error=F}
+knitr::opts_chunk$set(echo = F)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+here::i_am("fLOY_plot.Rmd")
+print(paste("Current working directory:", here::here()))
+```
+
+
+combined_both_gender.qsave: Seurat ojbect of both 4 cancer type: ESCA,MM,PACA,RC and with both Sex
+
+ESCA,MM,PACA,RC are the only 4 cancer types that having male samples in the dataset
+
+Reference: Zemin Zhang 2021 paper (Pan-cancer single-cell landscape of tumor-infiltrating T cells)
+
+```{r}
+source("../shared/functions.R")
+combined <- qs::qread('combined_both_gender.qsave')
+
+Idents(combined) <- combined$meta.cluster
+DefaultAssay(combined) <- "RNA"
+```
+
+# Load Y signatures 
+
+Calculated based on these methods:
+
+A list of genes in the male specific region of Y was used to identify a seven-gene signature
+of genes consistently expressed in normal tissues to score expression from this chromosome (RPS4Y1, DDX3Y, KDM5D, USP9Y,
+EIF1AY, UTY, ZFY; Figures S1A and S1B). A common set of housekeeping genes62 was used to control for overall expression activity.
+The ratio of the mean of expression of the seven Y genes to the expression across housekeeping genes was calculated as ‘‘Y expression
+score’’ for each individual sample. A ratio threshold of 0.035, corresponding to Y gene expression of 3.5% of housekeeping gene
+expression, was manually identified to classify tumors into ‘‘functional’’ LOY (fLOY) (ratio <0.035) and ‘‘WT’’ (ratio R0.035)
+(Figures S1C and S1D). 478 male patients did not have RNA-seq expression calls (mostly GBM) and were not included in the classification
+or downstream analysis based on Y status. Differential expression p values were calculated with a t-test followed by the
+Benjamini-Hochberg FDR correction.
+
+- loy_signature: the 7 genes in the original paper
+
+- tirosh_house_keeping: download from https://github.com/rheinbaylab/LOY_in_primary_tumors/tree/master/Files
+
+
+
+```{r}
+
+#meta1 is the seurat object metadata
+meta1 <- combined@meta.data %>%
+  rownames_to_column("cell_name")
+
+# Load signature
+loy_signature <- readLines("./data/loy_signature.txt")
+tirosh_house_keeping <- readLines("./data/tirosh_house_keeping.txt")
+
+# Keep only genes that exists in the object. before: 97 genes; after: 93 genes
+tirosh_house_keeping <- tirosh_house_keeping[tirosh_house_keeping %in% rownames(combined)]
+
+# Subset combined for loy_signature genes and calculate column means
+loy_avg <- colMeans(combined[loy_signature, ], na.rm = TRUE)
+
+# Subset combined for tirosh_house_keeping genes and calculate column means
+housekeeping_avg <- colMeans(combined[tirosh_house_keeping, ], na.rm = TRUE)
+
+# Add results to new columns in meta1
+meta1$loy_avg <- loy_avg[match(meta1$cell_name, names(loy_avg))]
+meta1$housekeeping_avg <- housekeeping_avg[match(meta1$cell_name, names(housekeeping_avg))]
+meta1$ratio_Y_housekeeping <- meta1$loy_avg / meta1$housekeeping_avg
+
+# Calculate is_fLOY, 0.035 is the threadhold from original paper
+meta1$is_fLOY <- ifelse(meta1$ratio_Y_housekeeping < 0.035, TRUE, FALSE)
+
+
+```
+ 
+# Load meta1 back to Seurat object
+
+```{r}
+combined@meta.data <- meta1 %>%
+  column_to_rownames("cell_name")
+```
+
+## fLOY Violin by gender and cancer
+
+```{r}
+
+meta1$sex_cancerType <- paste0(meta1$Gender, "-", meta1$CancerType)
+ggviolin(meta1, x = "sex_cancerType", y = "ratio_Y_housekeeping", add = "boxplot") +
+  geom_hline(yintercept = 0.035,
+             color = "red",
+             linetype = "dashed") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = 'Distribution of Y/housekeeping gene expression ratio in all cells',
+       x = 'Sex-CancerType',
+       y = 'Average Y/housekeeping ratio')
+
+```
+
+
+## fLOY number of cells
+
+```{r}
+knitr::kable(table(meta1$is_fLOY, meta1$sex_cancerType))
+
+```
+
+# Save object
+
+```{r}
+qs::qsave(combined, "combined_4cancerTypes_bothSex_07022023.qsave")
+
+```
