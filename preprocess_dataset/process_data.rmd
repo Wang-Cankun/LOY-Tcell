@@ -1,0 +1,374 @@
+# Re-process each dataset
+
+# Load libraries
+
+```{r, include=F}
+library(Seurat)
+library(tidyverse)
+library(here)
+library(reticulate)
+library(MatrixExtra)
+
+# test_scvi16_cuda113 is the author's conda env name, scrublet must be installed in your conda env: https://github.com/swolock/scrublet
+use_condaenv('test_scvi16_cuda113', conda = "auto", required = TRUE)
+
+```
+
+# Set working directory
+
+```{r,echo=F,eval=T,message=F,warning=F,error=F}
+
+here::set_here()
+print(paste("Current working directory:", here::here()))
+
+```
+
+# Load Integrated Data
+
+```{r}
+sample_name <- "Final_seurat_object.qs"
+combined <- qs::qread(sample_name)
+DefaultAssay(combined) <- "RNA"
+combined
+
+combine.list <- SplitObject(combined, split.by = "dataset")
+```
+
+```{r}
+# Checks if the sparse matrix seems to be both normalized and log-transformed.
+# Input: Seurat object.
+# Output: TRUE if the matrix appears to be both normalized and log-transformed; otherwise FALSE.
+is_normalized_and_log_transformed <- function(tmp_obj) {
+  sparse_matrix <- GetAssayData(tmp_obj, slot = "data", assay = "RNA")
+  
+  # Randomly sample some values to check if they're not all integers
+  sample_values <- sample(as.numeric(sparse_matrix), size = 1000, replace = TRUE)
+  has_non_integers <- any(floor(sample_values) != sample_values)
+  
+  # Check if max value is less than a threshold, suggesting it's log-transformed
+  max_val_below_threshold <- max(sparse_matrix) < 50
+  
+  # The matrix should not be all integers and max value should not exceed threshold
+  # for it to be considered both normalized and log-transformed
+  return(has_non_integers && max_val_below_threshold)
+}
+
+# Checks if the sparse matrix seems to be raw data.
+# Input: Seurat object.
+# Output: TRUE if the matrix seems to be raw data, otherwise FALSE.
+is_raw_data <- function(tmp_obj) {
+  sparse_matrix <- GetAssayData(tmp_obj, slot = "data", assay = "RNA")
+  max_val <- max(sparse_matrix)
+  sample_values <- sample(as.numeric(sparse_matrix), size = 1000, replace = TRUE)
+  has_non_integers <- any(floor(sample_values) != sample_values)
+  return(max_val > 50 && !has_non_integers)
+}
+
+# Runs Scrublet for doublet detection and adds results to Seurat object.
+# Input: Seurat object with cells as rows and genes as columns.
+# Output: Seurat object with a new metadata column named 'is_doublet_Scrublet'.
+runScrublet <- function(tmp_obj) {
+  sparse_matrix <- GetAssayData(tmp_obj, slot = "data", assay = "RNA")
+  scr <- import("scrublet", convert = FALSE)
+  scrub <- scr$Scrublet(as.matrix(t_shallow(sparse_matrix)), expected_doublet_rate = 0.05)
+  predicted_doublets <- scrub$scrub_doublets()
+  pred_score <- py_to_r(predicted_doublets[0])
+  pred_doublet <- ifelse(pred_score > 0.3, T, F)
+  tmp_obj <- AddMetaData(tmp_obj, pred_doublet, col.name = "is_doublet_Scrublet")
+  return(tmp_obj)
+}
+
+# Re-runs preprocessing with quality filtering.
+# Input: Original Seurat object with raw data.
+# Output: New Seurat object, with quality filtering applied.
+rerun_preprocessing <- function(tmp_obj) {
+  original_n_cells <- ncol(tmp_obj)
+  tmp_obj <- PercentageFeatureSet(tmp_obj, "^MT-", col.name = "percent.mito")
+  if(ncol(tmp_obj) > 100) {
+    tmp_obj <- suppressWarnings(runScrublet(tmp_obj))
+  } else {
+    tmp_obj <- AddMetaData(tmp_obj, F, col.name = "is_doublet_Scrublet")
+  }
+  n_doublets <- length(which(tmp_obj$is_doublet_Scrublet == T))
+  tmp_obj <- AddMetaData(tmp_obj, n_doublets, col.name = "n_doublets")
+  tmp_obj <- subset(tmp_obj, subset = percent.mito < 10 & nFeature_RNA > 200 & is_doublet_Scrublet == FALSE)
+  new_n_cells <- ncol(tmp_obj)
+  tmp_obj <- AddMetaData(tmp_obj, original_n_cells, col.name = "original_n_cells")
+  tmp_obj <- AddMetaData(tmp_obj, new_n_cells, col.name = "new_n_cells")
+  return(tmp_obj)
+}
+
+```
+
+
+Processing dataset 1 (Adams_Kaminski_2020): Raw data = TRUE
+Processing dataset 2 (Chen_Zhang_2020): Raw data = TRUE
+Processing dataset 3 (Goveia_Carmeliet_2020): Raw data = TRUE
+Processing dataset 4 (Guo_Zhang_2018): Raw data = TRUE
+Processing dataset 5 (Habermann_Kropski_2020): Raw data = TRUE
+Processing dataset 6 (He_Fan_2021): Raw data = TRUE
+Processing dataset 7 (Lambrechts_Thienpont_2018_6149v1): Raw data = TRUE
+Processing dataset 8 (Lambrechts_Thienpont_2018_6149v2): Raw data = TRUE
+Processing dataset 9 (Lambrechts_Thienpont_2018_6653): Raw data = TRUE
+Processing dataset 10 (Madissoon_Meyer_2020): Raw data = TRUE
+Processing dataset 11 (Maier_Merad_2020): Raw data = TRUE
+Processing dataset 12 (Reyfman_Misharin_2018): Raw data = TRUE
+Processing dataset 13 (Travaglini_Krasnow_2020): Raw data = TRUE
+Processing dataset 14 (UKIM-V): Raw data = TRUE
+Processing dataset 15 (Vieira_Teichmann_2019): Raw data = TRUE
+Processing dataset 16 (Wu_Zhou_2021): Raw data = TRUE
+Processing dataset 17 (Zilionis_Klein_2019): Raw data = TRUE
+Processing dataset 18 (Meyer_2021_5prime): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 19 (Schiller_2021): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 20 (Nawijn_2021): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 21 (Krasnow_2020): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 22 (Teichmann_Meyer_2019): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 23 (Meyer_2019): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 24 (Banovich_Kropski_2020): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 25 (Sun_2020_batch1): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 26 (Duong_lungMAP_unpubl): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 27 (Barbry_Leroy_2020): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 28 (Jain_Misharin_2021_10Xv2): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 29 (Lafyatis_Rojas_2019_10Xv2): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 30 (Tata_unpubl): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 31 (Sun_2020_batch3): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 32 (Misharin_2021): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 33 (MeyerNikolic_unpubl_UCL): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 34 (Meyer_2021_3prime): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 35 (Schultze_unpubl): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 36 (Misharin_Budinger_2018): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 37 (Schiller_2020): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 38 (Jain_Misharin_2021_10Xv1): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 39 (Sun_2020_batch2): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 40 (Lafyatis_Rojas_2019_10Xv1): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 41 (Sun_2020_batch4): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 42 (Eils_2020): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 43 (Shalek_2018): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 44 (Seibold_2020_10Xv3): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 45 (Seibold_2020_10Xv2): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 46 (Ahern_Zurke_2022): Raw data = TRUE
+Processing dataset 47 (Data_Ji2020_Skin): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 48 (Data_Tirosh2016_Skin): Raw data = FALSE, Normalized and log-transformed = FALSE
+Processing dataset 49 (Data_Chen2021_Prostate): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 50 (Data_Sun2021_Liver-Biliary): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 51 (Data_Bi2021_Kidney): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 52 (Data_Chen2020_Head and Neck): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 53 (Data_Lee2020_Colorectal): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 54 (Data_Li2017_Colorectal): Raw data = FALSE, Normalized and log-transformed = FALSE
+Processing dataset 55 (Data_Gojo2020_Brain): Raw data = FALSE, Normalized and log-transformed = FALSE
+Processing dataset 56 (Data_Neftel2019_Brain_10X): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 57 (Data_Neftel2019_Brain_SmartSeq2): Raw data = FALSE, Normalized and log-transformed = FALSE
+Processing dataset 58 (Data_Venteicher2017_Brain): Raw data = FALSE, Normalized and log-transformed = FALSE
+Processing dataset 59 (Data_Yuan2018_Brain): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 60 (Data_Jerby-Arnon2021_Sarcoma_SmartSeq2): Raw data = FALSE, Normalized and log-transformed = FALSE
+Processing dataset 61 (Data_Qian2020_Breast): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 62 (Data_Galen2019_Hematologic): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 63 (Data_Wu2020_Hematologic_Group1): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 64 (Data_Wu2020_Hematologic_Group2): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 65 (Data_Wu2020_Hematologic_Group3): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 66 (Data_Wu2020_Hematologic_Group4): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 67 (Data_Qian2020_Lung): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 68 (Data_Xing2021_Lung): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 69 (Data_Dong2020_Neuroendocrine_Group1): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 70 (Data_Cui2021_Other-Models): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 71 (Data_Nath2021_Ovarian_10X): Raw data = FALSE, Normalized and log-transformed = TRUE
+Processing dataset 72 (Data_Qian2020_Ovarian): Raw data = FALSE, Normalized and log-transformed = TRUE
+
+# Process dataset
+
+```{r}
+
+new_list <- list()
+# loop over each datasets
+i=1
+for (i in seq_along(combine.list)) {
+  tmp_obj <- combine.list[[i]]
+  
+  check_raw_data <- suppressWarnings(is_raw_data(tmp_obj))
+  check_normalized_and_log <-
+    suppressWarnings(is_normalized_and_log_transformed(tmp_obj))
+  
+  # Print message
+  status_message <- paste0("Processing dataset ",
+                           i,
+                           " (",
+                           names(combine.list)[[i]],
+                           "): Raw data = ",
+                           check_raw_data)
+  
+  if (!check_raw_data) {
+    status_message <- paste0(status_message,
+                             ", Normalized and log-transformed = ",
+                             check_normalized_and_log)
+  }
+  message(status_message)
+  
+  # Process labels
+  if (check_raw_data) {
+    tmp_obj <- rerun_preprocessing(tmp_obj)
+    tmp_obj$data_label <- "raw_data"
+    tmp_obj <- NormalizeData(tmp_obj)
+  } else if (check_normalized_and_log) {
+    tmp_obj$data_label <- "Normalized_Log"
+  } else {
+    tmp_obj$data_label <- "Normalized_nonLog"
+    new_data_slot <- log1p(tmp_obj@assays$RNA@data)
+    tmp_obj@assays$RNA@data <- new_data_slot
+  }
+  
+  new_list[[i]] <- tmp_obj
+  names(new_list)[i] <- names(combine.list[i])
+}
+
+
+qs::qsave(new_list, "new_seurat_obj_list.qsave")
+
+
+```
+
+
+# 2-Barplot: Number of normalized and unnormalized dataset
+
+```{r}
+
+dataset_labels <- sapply(new_list, function(x){
+  return(as.character(x$data_label[1]))
+})
+df <- data.frame(labels = dataset_labels)
+df_counts <- as.data.frame(table(dataset_labels))
+
+p1 <- ggplot(df, aes(x = labels)) + 
+  geom_bar(aes(fill = labels), show.legend = FALSE) +
+  geom_text(data=df_counts, aes(x=dataset_labels, y=Freq, label=Freq), position=position_dodge(width=0.9), vjust=-0, size=6) + 
+  xlab("Dataset Type") +
+  ylab("Frequency") +
+  ggtitle("Frequency of Dataset Types") +
+  theme_classic()
+
+print(p1)
+```
+
+
+# 3-Number and Barplot: How many cell are doublet; plot cell number ~ technologies
+
+```{r}
+
+j=2
+doublet_tech <- data.frame()
+for (j in seq_along(new_list)) {
+  this_obj <- new_list[[j]]
+  if ("is_doublet_Scrublet" %in% colnames(this_obj@meta.data)) {
+    original_n_cells <- as.numeric(this_obj$original_n_cells[1])
+    n_doublet <- as.numeric(this_obj$n_doublets[1])
+    n_cells <- length(which(this_obj$is_doublet_Scrublet == FALSE))
+    this_tech <- this_obj$technology[1]
+    this_df <-
+      data.frame(dataset = names(new_list[j]), n_doublet, n_cells, this_tech)
+    doublet_tech <- rbind(doublet_tech, this_df)
+  }
+}
+
+# Convert the matrix to data frame
+doublet_tech_df <- as.data.frame(doublet_tech)
+doublet_tech_df$n_doublet <- as.numeric(doublet_tech_df$n_doublet)
+doublet_tech_df$n_cells <- as.numeric(doublet_tech_df$n_cells)
+doublet_tech_df$this_tech <- as.character(doublet_tech_df$this_tech)
+
+# Summarize data
+summary_df <- doublet_tech_df %>%
+  group_by(this_tech) %>%
+  summarise(
+    total_doublets = sum(n_doublet),
+    total_cells = sum(n_cells)
+  )
+
+p2 <- ggplot(summary_df, aes(x = this_tech)) +
+  geom_bar(aes(y = total_cells, fill = "Total Cells"), stat = "identity", position = "dodge") +
+  geom_bar(aes(y = total_doublets, fill = "Doublets"), stat = "identity", position = "dodge") +
+  geom_text(aes(y = total_cells, label = total_cells), position=position_dodge(width=0.9), vjust=0, size=6) +
+  geom_text(aes(y = total_doublets, label = total_doublets), position=position_dodge(width=0.9), vjust=0.5, size=6) +
+  ylab("Count") +
+  labs(fill = "Type") +
+  theme_classic()
+
+print(p2)
+```
+
+# 4-Number: how many cell are removed in quality control step.
+
+```{r}
+
+j=1
+total_removed_cells <- data.frame()
+for (j in seq_along(new_list)) {
+  this_obj <- new_list[[j]]
+  if("original_n_cells" %in% colnames(this_obj@meta.data)) {
+    original_n_cells <- as.numeric(this_obj$original_n_cells[1])
+  new_n_cells <- as.numeric(this_obj$new_n_cells[1])
+  removed_cells <- original_n_cells - new_n_cells
+  this_df <- data.frame(dataset = names(new_list[j]), original_n_cells, new_n_cells, removed_cells)
+  total_removed_cells <- rbind(total_removed_cells, this_df)
+  }
+}
+
+total_removed_cells
+write.csv(total_removed_cells, "total_removed_cells.csv")
+```
+
+
+
+```{r}
+
+
+```
+
+```{r}
+
+
+```
+
+```{r}
+
+
+```
+
+```{r}
+
+
+```
+
+```{r}
+
+
+```
+
+```{r}
+
+
+```
+
+```{r}
+
+
+```
+
+```{r}
+
+
+```
+
+```{r}
+
+
+```
+
+```{r}
+
+
+```
+
+```{r}
+sessionInfo()
+
+```
+
